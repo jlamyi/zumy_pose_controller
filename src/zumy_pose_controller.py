@@ -18,14 +18,15 @@ def get_yaw(quat):
   euler = tf.transformations.euler_from_quaternion(quat)
   return euler[2]
 
-x_increase = 0.1
-z_increase = 0.1
+x_increase = 0.05
+z_increase = 0.05
 
 class zumy_pose_controller():
   def __init__(self):
     ## TODO initialization origin setup
     rospy.init_node('zumy_pose_controller', anonymous=True)
     rospy.loginfo("Initializing...")
+    rospy.on_shutdown(self.myhook)
 
     self.setpoint = (0,0)
     self.origin = (0,0)
@@ -35,8 +36,15 @@ class zumy_pose_controller():
     self.ori_control = True
     self.first_time = True
     
-    self.pub = rospy.Publisher('robot0/cmd_vel', Twist, queue_size=10)
+    self.pub = rospy.Publisher('odroid4/cmd_vel', Twist, queue_size=10)
     self.listener = tf.TransformListener()
+
+  def myhook(self):
+    print "shutdown time!"
+    vo_cmd = (0,0)
+    for i in range(10):
+      self.pub.publish(vo_to_twist(vo_cmd))
+
 
   def measure(self):
     dist = math.hypot(self.setpoint[0]-self.current[0],self.setpoint[1]-self.current[1])
@@ -118,6 +126,7 @@ class zumy_pose_controller():
 	self.pub.publish(vo_to_twist(vo_cmd))
 
         rate.sleep()
+  
 
 if __name__ == '__main__':
   zpc = zumy_pose_controller()
