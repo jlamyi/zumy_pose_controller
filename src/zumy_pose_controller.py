@@ -20,7 +20,7 @@ def vo_to_twist(vo):
 # getting yaw from quaternion
 def get_yaw(quat):
   euler = tf.transformations.euler_from_quaternion(quat)
-  return euler[1]
+  return euler[2]
 
 class zumy_pose_controller():
   def __init__(self):
@@ -88,7 +88,7 @@ class zumy_pose_controller():
 
     while not rospy.is_shutdown():
         try:
-            (trans,rot) = self.listener.lookupTransform('/world', '/Tracker0', rospy.Time(0))
+            (trans,rot) = self.listener.lookupTransform('/correct_world', '/Tracker0', rospy.Time(0))
         except (tf.LookupException, tf.ConnectivityException, tf.ExtrapolationException):
             continue
 
@@ -111,7 +111,8 @@ class zumy_pose_controller():
         #rospy.loginfo("Desire yaw: %0.4f", a)
 
 	measured_yaw = get_yaw(rot)
-	#rospy.loginfo("Measured yaw is %0.4f", measured_yaw)
+        rospy.loginfo("Measured rot is [%0.4f, %0.4f, %0.4f, %0.4f]", rot[0],rot[1],rot[2],rot[3])
+	rospy.loginfo("Measured yaw is %0.4f", measured_yaw)
 
 	vo_cmd = (0,0)
 	self.pub.publish(vo_to_twist(vo_cmd))
