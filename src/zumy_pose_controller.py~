@@ -36,7 +36,7 @@ class zumy_pose_controller():
     self.first_time = True
 
     # orientation control parameters
-    self.ori_p = 0.5
+    self.ori_p = 0.6
     self.ori_constant_speed = 0.15
     self.ori_ctrl = True
     self.ori_tolerance = 0.02
