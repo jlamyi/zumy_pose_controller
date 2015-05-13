@@ -226,7 +226,7 @@ class zumy_pose_controller():
 
         ## TODO publish yaw_cmd, dist_cmd(maybe)
         self.pub_yaw_error.publish(self.ori_error)
-        self.pub_yaw.publish(self.yaw)
+        self.pub_yaw.publish(measured_yaw)
 	self.pub.publish(vo_to_twist(vo_cmd))
 
         rate.sleep()
