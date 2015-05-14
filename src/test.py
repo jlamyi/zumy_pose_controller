@@ -12,6 +12,8 @@ def vo_to_twist(vo):
 
 if __name__ =='__main__':
 
+  # print("input is %s",sys.argv[1])
+
   rospy.init_node('test',anonymous=True)
   pub = rospy.Publisher('odroid4/cmd_vel', Twist, queue_size = 5 )
   rate = rospy.Rate(100)

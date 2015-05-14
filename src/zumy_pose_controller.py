@@ -10,6 +10,11 @@ import sys
 x_increase = 0.05
 z_increase = 0.05
 
+if len(sys.argv) < 2:
+  robot_name = 'odroid4'
+else:
+  robot_name = sys.argv[1]
+
 # vo/twist transformation
 def vo_to_twist(vo):
   twist = Twist()
@@ -29,8 +34,8 @@ class zumy_pose_controller():
     rospy.loginfo("Initializing...")
     self.listener = tf.TransformListener()
  
-    ## TODO need to check if the arguments are valid
-    # self.setpoint = (sys.argv[0],sys.argv[1])
+    ## TODO need to check if the arguments are valid 
+    # self.setpoint = (sys.argv[1],sys.argv[2])
     # rospy.loginfo("Setpoint is (%s,%s)", self.setpoint[0], self.setpoint[1])
     
     # pose and setpoint initialization 
@@ -56,10 +61,10 @@ class zumy_pose_controller():
     self.dist_tolerance = 0.01
 
     # publisher/listener initializtion    
-    self.pub = rospy.Publisher('odroid4/cmd_vel', Twist, queue_size=5)
-    self.pub_yaw = rospy.Publisher('odroid4/yaw', Float64, queue_size=5)
-    self.pub_yaw_error = rospy.Publisher('odroid4/yaw/error', Float64, queue_size=5)
-    self.pub_yaw_dot = rospy.Publisher('odroid4/yaw_dot',Float64, queue_size=5)
+    self.pub = rospy.Publisher(robot_name + '/cmd_vel', Twist, queue_size=5)
+    self.pub_yaw = rospy.Publisher(robot_name + '/yaw', Float64, queue_size=5)
+    self.pub_yaw_error = rospy.Publisher(robot_name + '/yaw/error', Float64, queue_size=5)
+    self.pub_yaw_dot = rospy.Publisher(robot_name + '/yaw_dot',Float64, queue_size=5)
 
     # info variables
     self.ori_error = 0 
@@ -139,12 +144,18 @@ class zumy_pose_controller():
     error = self.ori_cmd - self.yaw
     if abs(error) < self.ori_tolerance:
       ## TODO need to make sure it is still at the point when it turns
-      '''self.ori_ctrl=False
+      # self.ori_ctrl=False
       self.set_info_type('ori_error','off')
-      self.set_info_type('yaw','off')'''
+      self.set_info_type('yaw','off')
       rospy.loginfo('orientation control is done!')
       self.show_info('cur_pos','once')
       self.show_info('setpoint','once')
+      self.show_info('ori_cmd','once')
+      self.show_info('yaw','once')
+
+      self.set_info_type('cur_pos','on')
+      self.set_info_type('setpoint','off')
+      self.set_info_type('dist_cmd','on')
       return (0,0)
     if abs(error) < self.ori_error_threshold:
       w = (error/abs(error)) * self.ori_constant_speed
@@ -154,6 +165,8 @@ class zumy_pose_controller():
 
   def dist_control(self):
     if abs(self.dist_cmd) < self.dist_tolerance:
+      self.set_info_type('cur_pos','off')
+      self.set_info_type('dist_cmd','off')
       return (0,0)
     v = self.dist_p * self.dist_cmd
     return (v,0) 
@@ -175,6 +188,10 @@ class zumy_pose_controller():
       self.info_cur_pos = value
     if info_type == 'setpoint':
       self.info_setpoint = value
+    if info_type == 'dist_cmd':
+      self.info_dist_cmd = value
+    if info_type == 'ori_cmd':
+      self.info_ori_cmd = value
 
   def show_info(self, info_type, special = ''):
     if info_type == 'cur_pos' and (self.info_cur_pos or special == 'once'):
@@ -185,12 +202,12 @@ class zumy_pose_controller():
       rospy.loginfo("Orientation command: %0.4f", self.ori_cmd)
     if info_type == 'dist_cmd' and (self.info_dist_cmd or special == 'once'):
       rospy.loginfo("Distance command: %0.4f", self.dist_cmd)
-    if info_type == 'yaw' and self.info_yaw:
+    if info_type == 'yaw' and (self.info_yaw or special == 'once'):
       rospy.loginfo("Yaw is %0.4f", self.yaw)
-    if info_type == 'yaw_dot' and self.info_yaw_dot:
+    if info_type == 'yaw_dot' and (self.info_yaw_dot or special == 'once'):
       rospy.loginfo("Yaw dot is %0.4f", self.yaw_dot)
       self.pub_yaw_dot.publish(self.yaw_dot)
-    if info_type == 'ori_error' and self.info_ori_error:
+    if info_type == 'ori_error' and (self.info_ori_error or special == 'once'):
       rospy.loginfo("Orientation error is %0.4f", self.ori_error)
 
   ### application functions ###
@@ -214,6 +231,9 @@ class zumy_pose_controller():
         self.update()
 
         self.show_info('cur_pos')
+
+        self.show_info('dist_cmd')
+        self.show_info('setpoint')
 	
 	if self.ori_ctrl:
           self.show_info('yaw')
