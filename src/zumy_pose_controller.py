@@ -7,8 +7,8 @@ import math
 import tf
 import sys
 
-x_increase = 0.05
-z_increase = 0.05
+x_increase = 0.3
+y_increase = 0.3
 
 if len(sys.argv) < 2:
   robot_name = 'odroid4'
@@ -41,11 +41,11 @@ class zumy_pose_controller():
     # pose and setpoint initialization 
     [x,y,z,measured_yaw,success] = self.tf_parser()
     rospy.loginfo("Getting initial pose...")
-    self.origin = (x, z)
-    self.current = (x, z) 
-    rospy.loginfo("Initial pos is (%0.4f , %0.4f)", x, z)
-    self.setpoint = (x + x_increase, z + z_increase)
-    rospy.loginfo("Setpoint is (%0.4f , %0.4f)", x + x_increase, z + z_increase)
+    self.origin = (x, y)
+    self.current = (x, y) 
+    rospy.loginfo("Initial pos is (%0.4f , %0.4f)", x, y)
+    self.setpoint = (x + x_increase, y + y_increase)
+    rospy.loginfo("Setpoint is (%0.4f , %0.4f)", x + x_increase, y + y_increase)
 
     # orientation control parameters
     self.ori_p = 0.6
@@ -59,6 +59,8 @@ class zumy_pose_controller():
     self.dist_p = 1
     self.dist_cmd = 0
     self.dist_tolerance = 0.01
+    self.dist_error_threshold = 0.05
+    self.direction = 0
 
     # publisher/listener initializtion    
     self.pub = rospy.Publisher(robot_name + '/cmd_vel', Twist, queue_size=5)
@@ -113,7 +115,7 @@ class zumy_pose_controller():
     [x,y,z,yaw,success] = self.tf_parser()
 
     # yaw update
-    self.yaw = yaw
+    self.yaw = yaw - 1.57
 
     # yaw_dot update
     dy = yaw - self.last_yaw
@@ -127,7 +129,7 @@ class zumy_pose_controller():
     self.ori_error = self.ori_cmd - yaw
     
     # current position update
-    self.current = (x, z)
+    self.current = (x, y)
 
     # ori_cmd and dist_cmd update
     ## TODO should make a switch for each mode here (input_cmd/set_cmd)
@@ -138,13 +140,15 @@ class zumy_pose_controller():
   def set_cmd(self):
     self.dist_cmd = math.hypot(self.setpoint[0]-self.current[0],self.setpoint[1]-self.current[1])
     self.ori_cmd = math.atan2(self.setpoint[1]-self.current[1],self.setpoint[0]-self.current[0])
+    if self.ori_cmd * self.direction < 0:
+      self.dist_cmd = -self.dist_cmd
 
   ### control functions ###
   def ori_control(self):
     error = self.ori_cmd - self.yaw
     if abs(error) < self.ori_tolerance:
       ## TODO need to make sure it is still at the point when it turns
-      # self.ori_ctrl=False
+      self.ori_ctrl=False
       self.set_info_type('ori_error','off')
       self.set_info_type('yaw','off')
       rospy.loginfo('orientation control is done!')
@@ -156,6 +160,8 @@ class zumy_pose_controller():
       self.set_info_type('cur_pos','on')
       self.set_info_type('setpoint','off')
       self.set_info_type('dist_cmd','on')
+
+      self.direction = self.ori_cmd
       return (0,0)
     if abs(error) < self.ori_error_threshold:
       w = (error/abs(error)) * self.ori_constant_speed
@@ -168,7 +174,10 @@ class zumy_pose_controller():
       self.set_info_type('cur_pos','off')
       self.set_info_type('dist_cmd','off')
       return (0,0)
-    v = self.dist_p * self.dist_cmd
+    if abs(self.dist_cmd) < self.dist_error_threshold:
+      v = 0.2
+    else:
+      v = self.dist_p * self.dist_cmd
     return (v,0) 
 
   ### info system ###
@@ -203,7 +212,7 @@ class zumy_pose_controller():
     if info_type == 'dist_cmd' and (self.info_dist_cmd or special == 'once'):
       rospy.loginfo("Distance command: %0.4f", self.dist_cmd)
     if info_type == 'yaw' and (self.info_yaw or special == 'once'):
-      rospy.loginfo("Yaw is %0.4f", self.yaw)
+      rospy.loginfo("Yaw is %0.4f degrees", self.yaw*57.29578)
     if info_type == 'yaw_dot' and (self.info_yaw_dot or special == 'once'):
       rospy.loginfo("Yaw dot is %0.4f", self.yaw_dot)
       self.pub_yaw_dot.publish(self.yaw_dot)
@@ -214,6 +223,9 @@ class zumy_pose_controller():
   def stop(self):
     rate = rospy.Rate(10)
     while not rospy.is_shutdown():
+        self.update()
+        self.show_info('yaw')
+        self.show_info('cur_pos')
         vo_cmd = (0,0) 
         self.pub.publish(vo_to_twist(vo_cmd))
         rate.sleep()
