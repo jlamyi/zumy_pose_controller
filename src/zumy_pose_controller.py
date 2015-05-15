@@ -52,16 +52,16 @@ class zumy_pose_controller():
     # orientation control parameters
     self.ori_p = 0.6
     self.ori_constant_speed = 0.2
-    # self.ori_ctrl = True
     self.ori_tolerance = 0.02
     self.ori_error_threshold = 0.4
     self.ori_cmd = 0 
 
     # distance control parameters
     self.dist_p = 1
+    self.dist_constant_speed = 0.14
     self.dist_cmd = 0
-    self.dist_tolerance = 0.01
-    self.dist_error_threshold = 0.1
+    self.dist_tolerance = 0.1
+    self.dist_error_threshold = 0.08
     self.direction = 0
 
     # publisher/listener initializtion    
@@ -77,11 +77,13 @@ class zumy_pose_controller():
 
     # timer
     self.timer_lock = False
-    self.last_time = rospy.get_time()
+    self.start_time = rospy.get_time()
+
     
     # info settings
     self.yaw_dot = 0
     self.last_yaw = 0
+    self.last_time = rospy.get_time()
 
     self.info_yaw = False
     self.info_yaw_dot = False
@@ -160,26 +162,29 @@ class zumy_pose_controller():
       self.dist_cmd = -self.dist_cmd
 
   ### state machine ###
-  def state_machine(self)
-    if self.state = 'break'
+  def state_machine(self):
+    if self.state == 'stop':
+      self.vo_cmd = (0,0)
+      rospy.loginfo('Stopped... Thank you!')
+    if self.state == 'break':
       self.vo_cmd = (0,0)
       rospy.loginfo('...in the break...')
-      if self.timer_lock
-        if rospy.get_time() - self.last_time > 5 # wait for 5 sec
+      if self.timer_lock:
+        if rospy.get_time() - self.start_time > 1: # wait for 5 sec
           self.timer_lock = False
-          self.set_info_type('cur_pos','on')
+          # self.set_info_type('cur_pos','on')
           self.set_info_type('dist_cmd','on')
           rospy.loginfo('Starting distance control...')
           self.state = 'dist_ctrl'
-      else
-        self.last_time = rospy.get_time()
+      else:
+        self.start_time = rospy.get_time()
         self.timer_lock = True 
       return
-    if self.state = 'ori_ctrl'
+    if self.state == 'ori_ctrl':
       self.vo_cmd = self.ori_control()
       rospy.loginfo("vo_cmd is (%0.4f, %0.4f)", self.vo_cmd[0], self.vo_cmd[1])
       return
-    if self.state = 'dist_ctrl'
+    if self.state == 'dist_ctrl':
       self.vo_cmd = self.dist_control()
       rospy.loginfo("vo_cmd is (%0.4f, %0.4f)", self.vo_cmd[0], self.vo_cmd[1])
       return
@@ -190,7 +195,6 @@ class zumy_pose_controller():
     error = self.ori_cmd - self.yaw
     if abs(error) < self.ori_tolerance:
       ## TODO need to make sure it is still at the point when it turns
-      # self.ori_ctrl=False
       self.set_info_type('ori_error','off')
       self.set_info_type('yaw','off')
       rospy.loginfo('orientation control is done!')
@@ -214,9 +218,10 @@ class zumy_pose_controller():
     if abs(self.dist_cmd) < self.dist_tolerance:
       self.set_info_type('cur_pos','off')
       self.set_info_type('dist_cmd','off')
+      self.state = 'stop'
       return (0,0)
     if abs(self.dist_cmd) < self.dist_error_threshold:
-      v = 0.2
+      v = self.dist_constant_speed
     else:
       v = self.dist_p * self.dist_cmd
     return (v,0) 
