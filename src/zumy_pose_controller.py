@@ -6,14 +6,17 @@ from std_msgs.msg import Float64
 import math
 import tf
 import sys
+import time
 
-x_increase = 0.3
-y_increase = 0.3
-
+## TODO need to check if the arguments are valid 
 if len(sys.argv) < 2:
   robot_name = 'odroid4'
+  s1 = 0
+  s2 = 0
 else:
   robot_name = sys.argv[1]
+  s1 = float(sys.argv[2])
+  s2 = float(sys.argv[3])
 
 # vo/twist transformation
 def vo_to_twist(vo):
@@ -33,24 +36,23 @@ class zumy_pose_controller():
     rospy.init_node('zumy_pose_controller', anonymous=True)
     rospy.loginfo("Initializing...")
     self.listener = tf.TransformListener()
- 
-    ## TODO need to check if the arguments are valid 
-    # self.setpoint = (sys.argv[1],sys.argv[2])
-    # rospy.loginfo("Setpoint is (%s,%s)", self.setpoint[0], self.setpoint[1])
-    
+     
     # pose and setpoint initialization 
     [x,y,z,measured_yaw,success] = self.tf_parser()
     rospy.loginfo("Getting initial pose...")
+    self.setpoint = (s1,s2)
     self.origin = (x, y)
     self.current = (x, y) 
     rospy.loginfo("Initial pos is (%0.4f , %0.4f)", x, y)
-    self.setpoint = (x + x_increase, y + y_increase)
-    rospy.loginfo("Setpoint is (%0.4f , %0.4f)", x + x_increase, y + y_increase)
+    rospy.loginfo("Setpoint is (%0.4f , %0.4f)", self.setpoint[0], self.setpoint[1])
+
+    # state machine
+    self.state = 'ori_ctrl'
 
     # orientation control parameters
     self.ori_p = 0.6
     self.ori_constant_speed = 0.2
-    self.ori_ctrl = True
+    # self.ori_ctrl = True
     self.ori_tolerance = 0.02
     self.ori_error_threshold = 0.4
     self.ori_cmd = 0 
@@ -59,7 +61,7 @@ class zumy_pose_controller():
     self.dist_p = 1
     self.dist_cmd = 0
     self.dist_tolerance = 0.01
-    self.dist_error_threshold = 0.05
+    self.dist_error_threshold = 0.1
     self.direction = 0
 
     # publisher/listener initializtion    
@@ -71,11 +73,15 @@ class zumy_pose_controller():
     # info variables
     self.ori_error = 0 
     self.yaw = 0
+    self.vo_cmd = (0,0)
 
+    # timer
+    self.timer_lock = False
+    self.last_time = rospy.get_time()
+    
     # info settings
     self.yaw_dot = 0
     self.last_yaw = 0
-    self.last_time = rospy.get_time()
 
     self.info_yaw = False
     self.info_yaw_dot = False
@@ -126,7 +132,7 @@ class zumy_pose_controller():
     self.last_time = now
 
     # ori_error update
-    self.ori_error = self.ori_cmd - yaw
+    self.ori_error = (self.ori_cmd - self.yaw) * 57.29578
     
     # current position update
     self.current = (x, y)
@@ -137,18 +143,54 @@ class zumy_pose_controller():
     ## TODO add another subscriber for dist_cmd
     #rospy.Subscriber("ori_cmd", Float64, self.set_ori_cmd)
 
+  def publish(self):
+    ## TODO publish yaw_cmd, dist_cmd(maybe)
+
+    # info publish
+    self.pub_yaw_error.publish(self.ori_error)
+    self.pub_yaw.publish(self.yaw)
+
+    # output publish
+    self.pub.publish(vo_to_twist(self.vo_cmd))
+
   def set_cmd(self):
     self.dist_cmd = math.hypot(self.setpoint[0]-self.current[0],self.setpoint[1]-self.current[1])
     self.ori_cmd = math.atan2(self.setpoint[1]-self.current[1],self.setpoint[0]-self.current[0])
     if self.ori_cmd * self.direction < 0:
       self.dist_cmd = -self.dist_cmd
 
-  ### control functions ###
+  ### state machine ###
+  def state_machine(self)
+    if self.state = 'break'
+      self.vo_cmd = (0,0)
+      rospy.loginfo('...in the break...')
+      if self.timer_lock
+        if rospy.get_time() - self.last_time > 5 # wait for 5 sec
+          self.timer_lock = False
+          self.set_info_type('cur_pos','on')
+          self.set_info_type('dist_cmd','on')
+          rospy.loginfo('Starting distance control...')
+          self.state = 'dist_ctrl'
+      else
+        self.last_time = rospy.get_time()
+        self.timer_lock = True 
+      return
+    if self.state = 'ori_ctrl'
+      self.vo_cmd = self.ori_control()
+      rospy.loginfo("vo_cmd is (%0.4f, %0.4f)", self.vo_cmd[0], self.vo_cmd[1])
+      return
+    if self.state = 'dist_ctrl'
+      self.vo_cmd = self.dist_control()
+      rospy.loginfo("vo_cmd is (%0.4f, %0.4f)", self.vo_cmd[0], self.vo_cmd[1])
+      return
+    return
+
   def ori_control(self):
+    ## TODO need to improve this to self.ori_error
     error = self.ori_cmd - self.yaw
     if abs(error) < self.ori_tolerance:
       ## TODO need to make sure it is still at the point when it turns
-      self.ori_ctrl=False
+      # self.ori_ctrl=False
       self.set_info_type('ori_error','off')
       self.set_info_type('yaw','off')
       rospy.loginfo('orientation control is done!')
@@ -156,12 +198,11 @@ class zumy_pose_controller():
       self.show_info('setpoint','once')
       self.show_info('ori_cmd','once')
       self.show_info('yaw','once')
-
-      self.set_info_type('cur_pos','on')
-      self.set_info_type('setpoint','off')
-      self.set_info_type('dist_cmd','on')
+      rospy.loginfo('Break for 5 sec...')
 
       self.direction = self.ori_cmd
+
+      self.state = 'break'
       return (0,0)
     if abs(error) < self.ori_error_threshold:
       w = (error/abs(error)) * self.ori_constant_speed
@@ -217,7 +258,7 @@ class zumy_pose_controller():
       rospy.loginfo("Yaw dot is %0.4f", self.yaw_dot)
       self.pub_yaw_dot.publish(self.yaw_dot)
     if info_type == 'ori_error' and (self.info_ori_error or special == 'once'):
-      rospy.loginfo("Orientation error is %0.4f", self.ori_error)
+      rospy.loginfo("Orientation error is %0.4f degrees", self.ori_error)
 
   ### application functions ###
   def stop(self):
@@ -243,23 +284,13 @@ class zumy_pose_controller():
         self.update()
 
         self.show_info('cur_pos')
-
         self.show_info('dist_cmd')
         self.show_info('setpoint')
-	
-	if self.ori_ctrl:
-          self.show_info('yaw')
-	  vo_cmd = self.ori_control()
-	  # rospy.loginfo("vo_cmd is (%0.4f, %0.4f)", vo_cmd[0], vo_cmd[1])
-	else:
-	  vo_cmd = self.dist_control()
-
         self.show_info('ori_error')
+        self.show_info('yaw')
 
-        ## TODO publish yaw_cmd, dist_cmd(maybe)
-        self.pub_yaw_error.publish(self.ori_error)
-        self.pub_yaw.publish(self.yaw)
-	self.pub.publish(vo_to_twist(vo_cmd))
+        self.state_machine()
+        self.publish()
 
         rate.sleep()
 
