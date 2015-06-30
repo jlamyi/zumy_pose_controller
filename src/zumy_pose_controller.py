@@ -51,9 +51,11 @@ class zumy_pose_controller():
 
     # orientation control parameters
     self.ori_p = 0.6
-    self.ori_constant_speed = 0.2
+    self.ori_constant_speed_low = 0.2
+    self.ori_constant_speed_high = 0.5
     self.ori_tolerance = 0.02
-    self.ori_error_threshold = 0.4
+    self.ori_error_low_threshold = 0.4
+    self.ori_error_high_threshold = self.ori_constant_speed_high/self.ori_p
     self.ori_cmd = 0 
 
     # distance control parameters
@@ -123,7 +125,7 @@ class zumy_pose_controller():
     [x,y,z,yaw,success] = self.tf_parser()
 
     # yaw update
-    self.yaw = yaw - 1.57
+    self.yaw = yaw
 
     # yaw_dot update
     dy = yaw - self.last_yaw
@@ -176,6 +178,7 @@ class zumy_pose_controller():
           self.set_info_type('dist_cmd','on')
           rospy.loginfo('Starting distance control...')
           self.state = 'dist_ctrl'
+          # self.state = "stop"
       else:
         self.start_time = rospy.get_time()
         self.timer_lock = True 
@@ -208,10 +211,14 @@ class zumy_pose_controller():
 
       self.state = 'break'
       return (0,0)
-    if abs(error) < self.ori_error_threshold:
-      w = (error/abs(error)) * self.ori_constant_speed
+    if abs(error) < self.ori_error_low_threshold:
+      w = (error/abs(error)) * self.ori_constant_speed_low
+    elif abs(error) > self.ori_error_high_threshold:
+      w = (error/abs(error)) * self.ori_constant_speed_high
     else:
       w = self.ori_p * error
+    if abs(error) > 3.14:
+        w = -w
     return (0,w)
 
   def dist_control(self):
@@ -297,6 +304,36 @@ class zumy_pose_controller():
         self.state_machine()
         self.publish()
 
+        rate.sleep()
+
+  def ori_control_test(self):
+   
+    counter = 0
+
+    rate = rospy.Rate(10.0)
+    self.set_info_type('ori_error','on')
+    self.set_info_type('yaw','on')
+
+    self.ori_cmd = math.atan2(self.setpoint[1],self.setpoint[0])
+
+    while not rospy.is_shutdown():
+        [x,y,z,yaw,success] = self.tf_parser()
+
+        self.yaw = yaw
+        ## TODO use ori_cmd after initialization
+        self.ori_error = (self.ori_cmd - self.yaw) * 57.29578
+
+        self.show_info('ori_error')
+        self.show_info('yaw')
+
+        self.vo_cmd = self.ori_control()
+        self.publish()
+        
+        ## for debug, to enable it stops
+        if self.vo_cmd == (0,0):
+            counter = counter + 1
+            if counter == 30:
+                break
         rate.sleep()
 
 if __name__ == '__main__':
