@@ -39,6 +39,9 @@ class zumy_pose_controller():
      
     # pose and setpoint initialization 
     [x,y,z,measured_yaw,success] = self.tf_parser()
+    while not success:
+        print "Waiting for OptiTrack localization..."
+        [x,y,z,measured_yaw,success] = self.tf_parser()
     rospy.loginfo("Getting initial pose...")
     self.setpoint = (s1,s2)
     self.origin = (x, y)
