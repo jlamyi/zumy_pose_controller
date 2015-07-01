@@ -33,7 +33,7 @@ class zumy_pose_controller():
     self.state = 'ori_ctrl'
 
     # mode selection
-    if s1 == None and s2 == None:
+    if s1 == None or s2 == None:
         self.manual = False
         print "Auto mode"
     else:
@@ -117,10 +117,18 @@ class zumy_pose_controller():
     self.start_time = rospy.get_time()
 
     # shutdown callback
-    rospy.on_shutdown(self.shutdown_cb)
+    rospy.on_shutdown(self.shutdownCB)
+
+
+  ### ori/dist command accessors ###
+  def set_cmd(self): 
+    self.dist_cmd = math.hypot(self.setpoint[0]-self.current[0],self.setpoint[1]-self.current[1])
+    self.ori_cmd = math.atan2(self.setpoint[1]-self.current[1],self.setpoint[0]-self.current[0])
+    if self.ori_cmd * self.direction < 0:
+      self.dist_cmd = -self.dist_cmd
 
   ### callback functions ###
-  def shutdown_cb(self):
+  def shutdownCB(self):
     print "Shutting down Zumy..."
     vo_cmd = (0,0)
     for i in range(100):
@@ -130,7 +138,8 @@ class zumy_pose_controller():
       s1 = data.pose.position.x
       s2 = data.pose.position.y
       self.setpoint = (s1, s2)
-      if self.state == 'stop':
+      ### TODO improve here for a better transition
+      if self.get_state() == 'stop':
           self.state = 'ori_ctrl' 
  
   ### update functions ###
@@ -152,6 +161,9 @@ class zumy_pose_controller():
 
   def update(self):
     [x,y,z,yaw,success] = self.tf_parser()
+    while not success:
+        print "Waiting for OptiTrack localization..."
+        [x,y,z,yaw,success] = self.tf_parser()
 
     # yaw update
     self.yaw = yaw
@@ -163,18 +175,9 @@ class zumy_pose_controller():
     self.yaw_dot = dy/dt
     self.last_yaw = yaw
     self.last_time = now
-
-    # ori_error update
-    self.ori_error = (self.ori_cmd - self.yaw) * 57.29578
     
     # current position update
     self.current = (x, y)
-
-    # ori_cmd and dist_cmd update
-    ## TODO should make a switch for each mode here (input_cmd/set_cmd)
-    self.set_cmd()
-    ## TODO add another subscriber for dist_cmd
-    #rospy.Subscriber("ori_cmd", Float64, self.set_ori_cmd)
 
   def publish(self):
     ## TODO publish yaw_cmd, dist_cmd(maybe)
@@ -186,14 +189,8 @@ class zumy_pose_controller():
     # output publish
     self.pub.publish(vo_to_twist(self.vo_cmd))
 
-  def set_cmd(self):
-    self.dist_cmd = math.hypot(self.setpoint[0]-self.current[0],self.setpoint[1]-self.current[1])
-    self.ori_cmd = math.atan2(self.setpoint[1]-self.current[1],self.setpoint[0]-self.current[0])
-    if self.ori_cmd * self.direction < 0:
-      self.dist_cmd = -self.dist_cmd
-
   ### state machine ###
-  def state_machine(self):
+  def state_machine(self): # input={ori_cmd, dist_cmd}, output={vo_cmd}
     if self.state == 'stop':
       self.vo_cmd = (0,0)
       rospy.loginfo('Stopped, waiting for commands...')
@@ -204,7 +201,7 @@ class zumy_pose_controller():
       self.vo_cmd = (0,0)
       rospy.loginfo('...in the break...')
       if self.timer_lock:
-        if rospy.get_time() - self.start_time > 1: # wait for 5 sec
+        if rospy.get_time() - self.start_time > 1: # wait for 1 sec
           self.timer_lock = False
           # self.set_info_type('cur_pos','on')
           self.set_info_type('dist_cmd','on')
@@ -216,19 +213,36 @@ class zumy_pose_controller():
         self.timer_lock = True 
       return
     if self.state == 'ori_ctrl':
-      self.vo_cmd = self.ori_control()
+      [self.vo_cmd, reached] = self.ori_control()
+      if reached:
+          self.state = 'break'
       rospy.loginfo("vo_cmd is (%0.4f, %0.4f)", self.vo_cmd[0], self.vo_cmd[1])
       return
     if self.state == 'dist_ctrl':
-      self.vo_cmd = self.dist_control()
+      [self.vo_cmd, reached] = self.dist_control()
+      if reached:
+          if self.manual:
+              self.state = 'exit'
+          else:
+              self.state = 'stop'
       rospy.loginfo("vo_cmd is (%0.4f, %0.4f)", self.vo_cmd[0], self.vo_cmd[1])
       return
     return
 
+  def get_state(self):
+    return self.state
+
+  ### controllers ###
   def ori_control(self):
-    ## TODO need to improve this to self.ori_error
-    error = self.ori_cmd - self.yaw
+    error = self.ori_cmd - self.yaw 
+    self.ori_error = error
+    reached = False
+
     if abs(error) < self.ori_tolerance:
+
+      self.direction = self.ori_cmd
+      reached = True
+
       ## TODO need to make sure it is still at the point when it turns
       self.set_info_type('ori_error','off')
       self.set_info_type('yaw','off')
@@ -239,10 +253,8 @@ class zumy_pose_controller():
       self.show_info('yaw','once')
       rospy.loginfo('Break for 5 sec...')
 
-      self.direction = self.ori_cmd
+      return [(0,0), reached]
 
-      self.state = 'break'
-      return (0,0)
     if abs(error) < self.ori_error_low_threshold:
       w = (error/abs(error)) * self.ori_constant_speed_low
     elif abs(error) > self.ori_error_high_threshold:
@@ -251,24 +263,23 @@ class zumy_pose_controller():
       w = self.ori_p * error
     if abs(error) > 3.14:
         w = -w
-    return (0,w)
+    return [(0,w), reached]
 
   def dist_control(self):
+    reached = False
     if abs(self.dist_cmd) < self.dist_tolerance:
+      reached = True
       self.set_info_type('cur_pos','off')
       self.set_info_type('dist_cmd','off')
-      if self.manual:
-          self.state = 'exit'
-      else:
-          self.state = 'stop'
-      return (0,0)
+      return [(0,0), reached]
     if abs(self.dist_cmd) < self.dist_error_threshold:
       v = self.dist_constant_speed
     else:
       v = self.dist_p * self.dist_cmd
-    return (v,0) 
+    return [(v,0), reached] 
 
   ### info system ###
+  ### TODO try to use a dictionary instead
   def set_info_type(self, info_type, switch):
     if switch == 'on':
       value = True
@@ -312,14 +323,14 @@ class zumy_pose_controller():
     rate = rospy.Rate(10)
     while not rospy.is_shutdown():
         self.update()
+
         self.show_info('yaw')
         self.show_info('cur_pos')
+
         vo_cmd = (0,0) 
         self.pub.publish(vo_to_twist(vo_cmd))
-        rate.sleep()
 
-  def set_ori_cmd(self, data): 
-    self.ori_cmd = data.data
+        rate.sleep()
 
   def run(self):
     rate = rospy.Rate(10.0)
@@ -329,6 +340,8 @@ class zumy_pose_controller():
 
     while not rospy.is_shutdown():
         self.update()
+        ### TODO attention! this requires setpoint is set 
+        self.set_cmd()
 
         self.show_info('cur_pos')
         self.show_info('dist_cmd')
@@ -339,40 +352,39 @@ class zumy_pose_controller():
         self.state_machine()
         self.publish()
         
-        if self.state == 'exit':
+        if self.get_state() == 'exit':
             break
 
         rate.sleep()
 
   def ori_control_test(self):
-   
-    counter = 0
 
-    rate = rospy.Rate(10.0)
-    self.set_info_type('ori_error','on')
-    self.set_info_type('yaw','on')
+    if self.manual:
+      counter = 0
 
-    self.ori_cmd = math.atan2(self.setpoint[1],self.setpoint[0])
+      rate = rospy.Rate(10.0)
+      self.set_info_type('ori_error','on')
+      self.set_info_type('yaw','on')
+  
+      self.ori_cmd = math.atan2(self.setpoint[1],self.setpoint[0])
 
-    while not rospy.is_shutdown():
-        [x,y,z,yaw,success] = self.tf_parser()
+      while not rospy.is_shutdown():
+          self.update()
 
-        self.yaw = yaw
-        ## TODO use ori_cmd after initialization
-        self.ori_error = (self.ori_cmd - self.yaw) * 57.29578
+    	  [self.vo_cmd, reached] = self.ori_control()
+    	  self.publish()
 
-        self.show_info('ori_error')
-        self.show_info('yaw')
+       	  self.show_info('ori_error')
+	  self.show_info('yaw')
 
-        self.vo_cmd = self.ori_control()
-        self.publish()
-        
-        ## for debug, to enable it stops
-        if self.vo_cmd == (0,0):
-            counter = counter + 1
-            if counter == 30:
-                break
-        rate.sleep()
+	  ## for debug, to enable it stops
+	  if reached:
+	      counter = counter + 1
+	      if counter == 30:
+	          break
+	  rate.sleep()
+    else:
+        print "input is not valid"
 
 if __name__ == '__main__':
   zpc = zumy_pose_controller()
