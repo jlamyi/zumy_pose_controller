@@ -1,22 +1,15 @@
 #!/usr/bin/python
 
 import rospy
-from geometry_msgs.msg import Twist
+from geometry_msgs.msg import Twist, PoseStamped
 from std_msgs.msg import Float64
 import math
 import tf
 import sys
 import time
 
-## TODO need to check if the arguments are valid 
-if len(sys.argv) < 2:
-  robot_name = 'odroid4'
-  s1 = 0
-  s2 = 0
-else:
-  robot_name = sys.argv[1]
-  s1 = float(sys.argv[2])
-  s2 = float(sys.argv[3])
+## TODO get rid of robot name
+robot_name = 'odroid3'
 
 # vo/twist transformation
 def vo_to_twist(vo):
@@ -31,25 +24,57 @@ def get_yaw(quat):
   return euler[2]
 
 class zumy_pose_controller():
-  def __init__(self):
+  def __init__(self, s1=None, s2=None):
     # initialization origin setup
     rospy.init_node('zumy_pose_controller', anonymous=True)
     rospy.loginfo("Initializing...")
+
+    # mode selection
+    if s1 == None and s2 == None:
+        self.manual = False
+        print "Auto mode"
+    else:
+        self.manual = True
+        print "Manual mode"
+
+    # listener initialization
     self.listener = tf.TransformListener()
+
+    # publisher initialization    
+    self.pub = rospy.Publisher(robot_name + '/cmd_vel', Twist, queue_size=5)
+    self.pub_yaw = rospy.Publisher(robot_name + '/yaw', Float64, queue_size=5)
+    self.pub_yaw_error = rospy.Publisher(robot_name + '/yaw/error', Float64, queue_size=5)
+    self.pub_yaw_dot = rospy.Publisher(robot_name + '/yaw_dot',Float64, queue_size=5)
+
+    # subscriber initialization
+    if not self.manual:
+        rospy.Subscriber("/move_base_simple/goal", PoseStamped, self.setpointCB)
      
-    # pose and setpoint initialization 
+    # pose initialization 
     [x,y,z,measured_yaw,success] = self.tf_parser()
     while not success:
         print "Waiting for OptiTrack localization..."
         [x,y,z,measured_yaw,success] = self.tf_parser()
-    rospy.loginfo("Getting initial pose...")
-    self.setpoint = (s1,s2)
-    self.origin = (x, y)
+
     self.current = (x, y) 
     rospy.loginfo("Initial pos is (%0.4f , %0.4f)", x, y)
-    rospy.loginfo("Setpoint is (%0.4f , %0.4f)", self.setpoint[0], self.setpoint[1])
 
-    # state machine
+    # set point initialization
+    if self.manual:
+        self.setpoint = (s1,s2)
+    else:
+        self.setpoint = None 
+        ## TODO if it falls into this loop, it cannot be exited by interrupt
+        while self.setpoint == None:
+            time.sleep(1)
+            print "Waiting for set point..."
+
+    rospy.loginfo("Initial setpoint is (%0.4f , %0.4f)", self.setpoint[0], self.setpoint[1])
+
+    ## TODO self.origin may be useless
+    self.origin = (x, y)    
+
+    # state machine initialization
     self.state = 'ori_ctrl'
 
     # orientation control parameters
@@ -69,21 +94,10 @@ class zumy_pose_controller():
     self.dist_error_threshold = 0.08
     self.direction = 0
 
-    # publisher/listener initializtion    
-    self.pub = rospy.Publisher(robot_name + '/cmd_vel', Twist, queue_size=5)
-    self.pub_yaw = rospy.Publisher(robot_name + '/yaw', Float64, queue_size=5)
-    self.pub_yaw_error = rospy.Publisher(robot_name + '/yaw/error', Float64, queue_size=5)
-    self.pub_yaw_dot = rospy.Publisher(robot_name + '/yaw_dot',Float64, queue_size=5)
-
     # info variables
     self.ori_error = 0 
     self.yaw = 0
     self.vo_cmd = (0,0)
-
-    # timer
-    self.timer_lock = False
-    self.start_time = rospy.get_time()
-
     
     # info settings
     self.yaw_dot = 0
@@ -98,14 +112,26 @@ class zumy_pose_controller():
     self.info_dist_cmd = False
     self.info_ori_cmd = False
 
+    # timer
+    self.timer_lock = False
+    self.start_time = rospy.get_time()
+
     # shutdown callback
     rospy.on_shutdown(self.shutdown_cb)
 
+  ### callback functions ###
   def shutdown_cb(self):
     print "Shutting down Zumy..."
     vo_cmd = (0,0)
     for i in range(100):
       self.pub.publish(vo_to_twist(vo_cmd))
+
+  def setpointCB(self, data):
+      s1 = data.pose.position.x
+      s2 = data.pose.position.y
+      self.setpoint = (s1, s2)
+      if self.state == 'stop':
+          self.state = 'ori_ctrl' 
  
   ### update functions ###
   def tf_parser(self):
@@ -170,7 +196,10 @@ class zumy_pose_controller():
   def state_machine(self):
     if self.state == 'stop':
       self.vo_cmd = (0,0)
-      rospy.loginfo('Stopped... Thank you!')
+      rospy.loginfo('Stopped, waiting for commands...')
+    if self.state == 'exit':
+      self.vo_cmd = (0,0)
+      rospy.loginfo('Exiting...')      
     if self.state == 'break':
       self.vo_cmd = (0,0)
       rospy.loginfo('...in the break...')
@@ -228,7 +257,10 @@ class zumy_pose_controller():
     if abs(self.dist_cmd) < self.dist_tolerance:
       self.set_info_type('cur_pos','off')
       self.set_info_type('dist_cmd','off')
-      self.state = 'stop'
+      if self.manual:
+          self.state = 'exit'
+      else:
+          self.state = 'stop'
       return (0,0)
     if abs(self.dist_cmd) < self.dist_error_threshold:
       v = self.dist_constant_speed
@@ -306,6 +338,9 @@ class zumy_pose_controller():
 
         self.state_machine()
         self.publish()
+        
+        if self.state == 'exit':
+            break
 
         rate.sleep()
 
