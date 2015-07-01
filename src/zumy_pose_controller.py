@@ -29,6 +29,9 @@ class zumy_pose_controller():
     rospy.init_node('zumy_pose_controller', anonymous=True)
     rospy.loginfo("Initializing...")
 
+    # state machine initialization
+    self.state = 'ori_ctrl'
+
     # mode selection
     if s1 == None and s2 == None:
         self.manual = False
@@ -73,9 +76,6 @@ class zumy_pose_controller():
 
     ## TODO self.origin may be useless
     self.origin = (x, y)    
-
-    # state machine initialization
-    self.state = 'ori_ctrl'
 
     # orientation control parameters
     self.ori_p = 0.6
