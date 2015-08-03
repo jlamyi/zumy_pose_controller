@@ -1,6 +1,6 @@
 #!/usr/bin/python
 
-import rospy
+import rospy, sys
 from zumy_pose_controller import zumy_pose_controller
 
 ## TODO need to check if the arguments are valid
